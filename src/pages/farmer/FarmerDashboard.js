@@ -30,7 +30,7 @@ L.Icon.Default.mergeOptions({
 // Test key looks like: rzp_test_XXXXXXXXXXXX
 // Live key looks like: rzp_live_XXXXXXXXXXXX
 // Paste your rzp_test_... key directly here:
-const RAZORPAY_KEY_ID = "rzp_test_REPLACE_WITH_YOUR_KEY";
+const RAZORPAY_KEY_ID = "rzp_test_SO6rhWJ20EDwzs";
 
 // ─── Load Razorpay checkout script once ─────────────────────────────────────
 function loadRazorpayScript() {
