@@ -357,6 +357,11 @@ export default function AdminDashboard() {
     await deleteDoc(doc(db,"labours",id));
     toast.success(`${name} removed.`);
   };
+  const delFarmer = async (id, name) => {
+    if (!window.confirm(`Remove farmer ${name}? This cannot be undone.`)) return;
+    await deleteDoc(doc(db,"users",id));
+    toast.success(`${name} removed.`);
+  };
 
   const handleAdminBook = async () => {
     if (!bFarmerId||!bSupervisorId||!bDate||!bAddress){toast.error("Farmer, supervisor, date and address are required."); return;}
@@ -1281,7 +1286,10 @@ export default function AdminDashboard() {
                           </div>
                         </div>
                       </div>
-                      <motion.button style={A.viewBtn} onClick={()=>setDetailModal({type:"farmer",data:f})} whileHover={{scale:1.04}} whileTap={{scale:.96}}><Eye size={12}/>Details</motion.button>
+                      <div style={{display:"flex",gap:7,flexShrink:0}}>
+                        <motion.button style={A.viewBtn} onClick={()=>setDetailModal({type:"farmer",data:f})} whileHover={{scale:1.04}} whileTap={{scale:.96}}><Eye size={12}/>Details</motion.button>
+                        <motion.button style={A.delBtn} onClick={()=>delFarmer(f.id,f.name)} whileHover={{scale:1.04}} whileTap={{scale:.96}}><Trash2 size={13}/></motion.button>
+                      </div>
                     </motion.div>
                   );
                 })}

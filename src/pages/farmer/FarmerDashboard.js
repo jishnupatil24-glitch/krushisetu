@@ -526,7 +526,6 @@ export default function FarmerDashboard() {
               <span style={{ fontWeight:800, fontSize:16, color:"#1b4332", letterSpacing:"-0.3px" }}>KrishiSetu</span>
             </div>
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-              <div style={s.availPill}>🟢 {totalAvailableLabours} available</div>
               <button onClick={() => setSidebarOpen(true)} style={{ background:"#f4fdf6", border:"1px solid #e4ede8", cursor:"pointer", padding:"7px 8px", borderRadius:8, color:"#374151", display:"flex" }}>
                 <Menu size={20}/>
               </button>
