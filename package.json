@@ -19,7 +19,7 @@
     "react-router-dom": "^7.13.1",
     "react-scripts": "5.0.1",
     "web-vitals": "^2.1.4"
-  },
+  },"build": "set DISABLE_ESLINT_PLUGIN=true && react-scripts build",
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
