@@ -2,12 +2,7 @@ import React, { useState, useEffect } from "react";
 import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { auth, db } from "../../firebase";
-import {
-  collection, addDoc, query, where, doc,
-  getDoc, onSnapshot, updateDoc,
-} from "firebase/firestore";
-import { signOut, onAuthStateChanged } from "firebase/auth";
+import { supabase, toCamel, toSnake } from "../../supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import toast, { Toaster } from "react-hot-toast";
@@ -138,31 +133,48 @@ export default function FarmerDashboard() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    let unsubB1, unsubB2, unsubL;
+    let bookingsChannel, laboursChannel;
+    let currentUserId = null;
 
-    const unsubAuth = onAuthStateChanged(auth, (user) => {
+    const fetchBookings = async (uid) => {
+      const { data } = await supabase.from("bookings").select("*");
+      const all = (data || []).map(toCamel);
+      setAllBookings(all);
+      const mine = all.filter(b => b.farmerId === uid);
+      mine.sort((a,b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      setBookings(mine);
+    };
+    const fetchLabours = async () => {
+      const { data } = await supabase.from("labours").select("*");
+      setAllLabours((data || []).map(toCamel));
+    };
+
+    const initForUser = async (user) => {
+      currentUserId = user.id;
+      const { data: profile } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+      if (profile) setFarmerData(toCamel(profile));
+
+      await fetchBookings(user.id);
+      await fetchLabours();
+
+      bookingsChannel = supabase.channel("farmer-bookings-changes")
+        .on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, () => fetchBookings(currentUserId))
+        .subscribe();
+      laboursChannel = supabase.channel("farmer-labours-changes")
+        .on("postgres_changes", { event: "*", schema: "public", table: "labours" }, fetchLabours)
+        .subscribe();
+    };
+
+    const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange((_event, session) => {
       setAuthChecked(true);
-      if (!user) { navigate("/login"); return; }
-
-      getDoc(doc(db, "users", user.uid)).then(d => {
-        if (d.exists()) setFarmerData(d.data());
-      });
-
-      const bq = query(collection(db, "bookings"), where("farmerId", "==", user.uid));
-      unsubB1 = onSnapshot(bq, snap => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        list.sort((a,b) => new Date(b.createdAt?.toDate?.() || 0) - new Date(a.createdAt?.toDate?.() || 0));
-        setBookings(list);
-      });
-      unsubB2 = onSnapshot(collection(db,"bookings"), snap => setAllBookings(snap.docs.map(d=>({id:d.id,...d.data()}))));
-      unsubL  = onSnapshot(collection(db,"labours"),  snap => setAllLabours(snap.docs.map(d=>({id:d.id,...d.data()}))));
+      if (!session?.user) { navigate("/login"); return; }
+      if (session.user.id !== currentUserId) initForUser(session.user);
     });
 
     return () => {
-      unsubAuth();
-      unsubB1?.();
-      unsubB2?.();
-      unsubL?.();
+      authSub.unsubscribe();
+      if (bookingsChannel) supabase.removeChannel(bookingsChannel);
+      if (laboursChannel) supabase.removeChannel(laboursChannel);
     };
   }, [navigate]);
 
@@ -220,9 +232,9 @@ export default function FarmerDashboard() {
 
   // ── SHARED: create booking doc ──────────────────────────────────────────────
   const createBookingDoc = async ({ paymentStatus, paymentId = null, paymentOrderId = null, paymentSignature = null, paidAt = null }) => {
-    const user = auth.currentUser;
-    await addDoc(collection(db, "bookings"), {
-      farmerId:     user.uid,
+    const { data: { user } } = await supabase.auth.getUser();
+    const { error } = await supabase.from("bookings").insert(toSnake({
+      farmerId:     user.id,
       farmerName:   farmerData?.name,
       farmerPhone:  farmerData?.phone,
       village:      farmerData?.village,
@@ -255,7 +267,8 @@ export default function FarmerDashboard() {
       paymentSignature,
       paidAt,
       createdAt: new Date(),
-    });
+    }));
+    if (error) throw error;
   };
 
   // ── PAYMENT + BOOKING FLOW ───────────────────────────────────────────────
@@ -350,19 +363,21 @@ export default function FarmerDashboard() {
     try {
       const booking = bookings.find(b => b.id === bookingId);
       const updated = { ...(booking.farmerAttendance || {}), [labourId]: !currentStatus };
-      await updateDoc(doc(db,"bookings",bookingId), { farmerAttendance: updated });
+      const { error } = await supabase.from("bookings").update(toSnake({ farmerAttendance: updated })).eq("id", bookingId);
+      if (error) throw error;
       toast.success(!currentStatus ? "Marked present ✅" : "Marked absent");
     } catch { toast.error("Failed to update."); }
   };
 
   const handleConfirmBooking = async (bookingId) => {
     try {
-      await updateDoc(doc(db,"bookings",bookingId), { farmerConfirmed: true });
+      const { error } = await supabase.from("bookings").update(toSnake({ farmerConfirmed: true })).eq("id", bookingId);
+      if (error) throw error;
       toast.success("Work confirmed!");
     } catch { toast.error("Failed to confirm."); }
   };
 
-  const handleLogout = async () => { await signOut(auth); navigate("/login"); };
+  const handleLogout = async () => { await supabase.auth.signOut(); navigate("/login"); };
 
   const getStatusConfig = (status) => {
     if (status==="pending")   return { color:"#92400e", bg:"#fef9f0", border:"#fde68a", label:"Pending",   icon:AlertCircle };

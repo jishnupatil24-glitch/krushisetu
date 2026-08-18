@@ -1,7 +1,5 @@
 import React, { useState } from "react";
-import { auth, db } from "../../firebase";
-import { createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
+import { supabase } from "../../supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import toast, { Toaster } from "react-hot-toast";
@@ -69,27 +67,27 @@ function FarmerRegister() {
     setLoading(true);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth, email, password
-      );
-      const user = userCredential.user;
+      const { data, error: authError } = await supabase.auth.signUp({ email, password });
+      if (authError) throw authError;
+      const user = data.user;
 
-      await setDoc(doc(db, "users", user.uid), {
+      const { error: profileError } = await supabase.from("profiles").insert({
+        id: user.id,
         name,
         email,
         phone,
         village,
-        farmSize: farmSize || "Not specified",
-        cropType: cropType.length > 0 ? cropType : ["Not specified"],
+        farm_size: farmSize || "Not specified",
+        crop_type: cropType.length > 0 ? cropType : ["Not specified"],
         role: "farmer",
-        createdAt: new Date(),
       });
+      if (profileError) throw profileError;
 
       setCompleted(true);
       toast.success("Account created successfully! 🌾");
       setTimeout(() => navigate("/login"), 2500);
     } catch (err) {
-      if (err.code === "auth/email-already-in-use") {
+      if (err.message?.includes("already registered")) {
         toast.error("Email already registered!");
       } else {
         toast.error("Something went wrong. Try again!");

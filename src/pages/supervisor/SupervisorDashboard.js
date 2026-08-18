@@ -1,10 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { auth, db } from "../../firebase";
-import {
-  collection, query, where, doc, getDoc,
-  onSnapshot, updateDoc, addDoc, deleteDoc,
-} from "firebase/firestore";
-import { signOut, onAuthStateChanged } from "firebase/auth";
+import { supabase, toCamel, toSnake } from "../../supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import toast, { Toaster } from "react-hot-toast";
@@ -65,18 +60,45 @@ export default function SupervisorDashboard() {
 
   // ── AUTH PERSISTENCE ─────────────────────────────────────
   useEffect(() => {
-    let unsubLabours, unsubBookings;
-    const unsubAuth = onAuthStateChanged(auth, user => {
-      setAuthChecked(true);
-      if (!user) { navigate("/login"); return; }
-      getDoc(doc(db, "users", user.uid)).then(d => {
-        if (d.exists()) setSupData({ id: user.uid, ...d.data() });
+    let labourChannel, bookingChannel;
+
+    const fetchLabours = async (uid) => {
+      const { data } = await supabase.from("labours").select("*").eq("supervisor_id", uid);
+      setMyLabours((data || []).map(toCamel));
+    };
+    const fetchBookings = async () => {
+      const { data } = await supabase.from("bookings").select("*");
+      setAllBookings((data || []).map(toCamel));
+    };
+
+    let currentUserId = null;
+
+    const initForUser = (user) => {
+      currentUserId = user.id;
+      supabase.from("profiles").select("*").eq("id", user.id).single().then(({ data }) => {
+        if (data) setSupData(toCamel(data));
       });
-      const lq = query(collection(db, "labours"), where("supervisorId", "==", user.uid));
-      unsubLabours  = onSnapshot(lq, snap => setMyLabours(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-      unsubBookings = onSnapshot(collection(db, "bookings"), snap => setAllBookings(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+      fetchLabours(user.id);
+      fetchBookings();
+      labourChannel = supabase.channel(`sup-labours-${user.id}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "labours" }, () => fetchLabours(user.id))
+        .subscribe();
+      bookingChannel = supabase.channel(`sup-bookings-${user.id}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, fetchBookings)
+        .subscribe();
+    };
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthChecked(true);
+      if (!session?.user) { navigate("/login"); return; }
+      if (session.user.id !== currentUserId) initForUser(session.user);
     });
-    return () => { unsubAuth(); unsubLabours?.(); unsubBookings?.(); };
+
+    return () => {
+      subscription?.unsubscribe();
+      if (labourChannel) supabase.removeChannel(labourChannel);
+      if (bookingChannel) supabase.removeChannel(bookingChannel);
+    };
   }, [navigate]);
 
   useEffect(() => {
@@ -105,7 +127,7 @@ export default function SupervisorDashboard() {
 
   const pendingBookings  = allBookings.filter(b => b.status === "pending");
   const myAllAssignments = allBookings.filter(
-    b => b.supervisorId === auth.currentUser?.uid &&
+    b => b.supervisorId === supData?.id &&
          (b.status === "assigned" || b.status === "completed")
   );
   const myAssigned = myAllAssignments.filter(b => b.status === "assigned");
@@ -134,12 +156,13 @@ export default function SupervisorDashboard() {
     if (newPhone.length !== 10) { toast.error("Enter valid 10 digit phone!"); return; }
     setLoading(true);
     try {
-      await addDoc(collection(db, "labours"), {
+      const { error } = await supabase.from("labours").insert(toSnake({
         name: newName.trim(), phone: newPhone,
         supervisorId: supData.id, supervisorName: supData.name,
         available: true, unavailability: {}, attendanceMarked: false, createdAt: new Date(),
-      });
-      await updateDoc(doc(db, "users", supData.id), { labourCount: myLabours.length + 1 });
+      }));
+      if (error) throw error;
+      await supabase.from("profiles").update(toSnake({ labourCount: myLabours.length + 1 })).eq("id", supData.id);
       toast.success(`${newName} added to your team`);
       setNewName(""); setNewPhone("");
     } catch { toast.error("Failed to add labour."); }
@@ -148,7 +171,7 @@ export default function SupervisorDashboard() {
 
   const handleDeleteLabour = async (labourId, name) => {
     if (!window.confirm(`Remove ${name} from your team?`)) return;
-    try { await deleteDoc(doc(db, "labours", labourId)); toast.success(`${name} removed.`); }
+    try { const { error } = await supabase.from("labours").delete().eq("id", labourId); if (error) throw error; toast.success(`${name} removed.`); }
     catch { toast.error("Failed to remove."); }
   };
 
@@ -157,7 +180,7 @@ export default function SupervisorDashboard() {
     try {
       const key     = `${unavailDate}_${unavailSlot}`;
       const updated = { ...(unavailModal.unavailability || {}), [key]: unavailReason || "Personal reason" };
-      await updateDoc(doc(db, "labours", unavailModal.id), { unavailability: updated });
+      await supabase.from("labours").update({ unavailability: updated }).eq("id", unavailModal.id);
       toast.success("Marked unavailable");
       setUnavailModal(null); setUnavailDate(""); setUnavailReason("");
     } catch { toast.error("Failed to update."); }
@@ -167,7 +190,7 @@ export default function SupervisorDashboard() {
     const labour  = myLabours.find(l => l.id === labourId);
     const updated = { ...(labour.unavailability || {}) };
     delete updated[key];
-    await updateDoc(doc(db, "labours", labourId), { unavailability: updated });
+    await supabase.from("labours").update({ unavailability: updated }).eq("id", labourId);
     toast.success("Availability restored");
   };
 
@@ -178,7 +201,7 @@ export default function SupervisorDashboard() {
     setLoading(true);
     try {
       const selected = myLabours.filter(l => selectedLabourIds.includes(l.id));
-      await updateDoc(doc(db, "bookings", assignModal.id), {
+      await supabase.from("bookings").update(toSnake({
         status:              "assigned",
         supervisorId:        supData.id,
         supervisorName:      supData.name,
@@ -186,7 +209,7 @@ export default function SupervisorDashboard() {
         assignedLabour:      selectedLabourIds.length,
         assignedLabourIds:   selectedLabourIds,
         assignedLabourNames: selected.map(l => l.name),
-      });
+      })).eq("id", assignModal.id);
       toast.success(`Assigned to ${assignModal.farmerName}`);
       setAssignModal(null); setSelectedLabourIds([]);
     } catch { toast.error("Failed to assign."); }
@@ -199,7 +222,7 @@ export default function SupervisorDashboard() {
     try {
       const booking = allBookings.find(b => b.id === bookingId);
       const updated = { ...(booking.labourAttendance || {}), [labourId]: !currentStatus };
-      await updateDoc(doc(db, "bookings", bookingId), { labourAttendance: updated });
+      await supabase.from("bookings").update({ labour_attendance: updated }).eq("id", bookingId);
       toast.success(!currentStatus ? "Marked as present" : "Marked as absent");
     } catch { toast.error("Failed to update attendance."); }
   };
@@ -223,14 +246,14 @@ export default function SupervisorDashboard() {
             async pos => {
               const distance = getDistanceMetres(pos.coords.latitude, pos.coords.longitude, booking.farmLat, booking.farmLng);
               const visited  = distance <= 500;
-              await updateDoc(doc(db, "bookings", bookingId), buildPayload({
+              await supabase.from("bookings").update(toSnake(buildPayload({
                 supervisorVisitedFarm: visited, supervisorVisitedAt: new Date(), supervisorVisitDistance: Math.round(distance),
-              }));
+              }))).eq("id", bookingId);
               toast.success(visited ? "Work confirmed — farm visit verified" : "Work confirmed");
               resolve();
             },
             async () => {
-              await updateDoc(doc(db, "bookings", bookingId), buildPayload({ supervisorVisitedFarm: false, supervisorVisitedAt: new Date() }));
+              await supabase.from("bookings").update(toSnake(buildPayload({ supervisorVisitedFarm: false, supervisorVisitedAt: new Date() }))).eq("id", bookingId);
               toast.success("Work confirmed");
               resolve();
             },
@@ -240,7 +263,7 @@ export default function SupervisorDashboard() {
       } catch { toast.error("Failed to confirm."); }
     } else {
       try {
-        await updateDoc(doc(db, "bookings", bookingId), buildPayload({}));
+        await supabase.from("bookings").update(toSnake(buildPayload({}))).eq("id", bookingId);
         toast.success("Work confirmed");
       } catch { toast.error("Failed to confirm."); }
     }
@@ -253,10 +276,10 @@ export default function SupervisorDashboard() {
       const id = navigator.geolocation.watchPosition(
         async pos => {
           try {
-            await updateDoc(doc(db, "users", supData.id), {
+            await supabase.from("profiles").update(toSnake({
               supervisorLat: pos.coords.latitude, supervisorLng: pos.coords.longitude,
               supervisorLocationUpdatedAt: new Date(),
-            });
+            })).eq("id", supData.id);
           } catch {}
         },
         () => toast.error("Location access denied."),
@@ -267,7 +290,7 @@ export default function SupervisorDashboard() {
     } else {
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
       setWatchId(null); setLocationSharing(false);
-      try { await updateDoc(doc(db, "users", supData.id), { supervisorLat: null, supervisorLng: null, supervisorLocationUpdatedAt: null }); }
+      try { await supabase.from("profiles").update(toSnake({ supervisorLat: null, supervisorLng: null, supervisorLocationUpdatedAt: null })).eq("id", supData.id); }
       catch {}
       toast.success("Location sharing disabled");
     }
@@ -276,10 +299,10 @@ export default function SupervisorDashboard() {
   const handleLogout = async () => {
     if (watchId !== null) navigator.geolocation.clearWatch(watchId);
     if (supData) {
-      try { await updateDoc(doc(db, "users", supData.id), { supervisorLat: null, supervisorLng: null, supervisorLocationUpdatedAt: null }); }
+      try { await supabase.from("profiles").update(toSnake({ supervisorLat: null, supervisorLng: null, supervisorLocationUpdatedAt: null })).eq("id", supData.id); }
       catch {}
     }
-    await signOut(auth);
+    await supabase.auth.signOut();
     navigate("/login");
   };
 

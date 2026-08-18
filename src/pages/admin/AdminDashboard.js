@@ -1,11 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { auth, db } from "../../firebase";
-import {
-  collection, doc, getDoc, onSnapshot,
-  updateDoc, addDoc, deleteDoc, setDoc,
-} from "firebase/firestore";
-import { createUserWithEmailAndPassword, onAuthStateChanged } from "firebase/auth";
-import { signOut } from "firebase/auth";
+import { supabase, createIsolatedAuthClient, toCamel, toSnake } from "../../supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import toast, { Toaster } from "react-hot-toast";
@@ -155,10 +149,16 @@ function SupervisorLocationModal({ supervisor, onClose }) {
 
   useEffect(() => {
     if (!supervisor?.id) return;
-    const unsub = onSnapshot(doc(db, "users", supervisor.id), (snap) => {
-      if (snap.exists()) setLiveData(snap.data());
-    });
-    return () => unsub();
+    const fetchLive = async () => {
+      const { data } = await supabase.from("profiles").select("*").eq("id", supervisor.id).single();
+      if (data) setLiveData(toCamel(data));
+    };
+    fetchLive();
+    const channel = supabase
+      .channel(`profile-${supervisor.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles", filter: `id=eq.${supervisor.id}` }, fetchLive)
+      .subscribe();
+    return () => supabase.removeChannel(channel);
   }, [supervisor?.id]);
 
   const hasLocation = liveData?.supervisorLat && liveData?.supervisorLng;
@@ -166,7 +166,7 @@ function SupervisorLocationModal({ supervisor, onClose }) {
     ? `https://www.google.com/maps?q=${liveData.supervisorLat},${liveData.supervisorLng}`
     : null;
   const lastUpdated = liveData?.supervisorLocationUpdatedAt
-    ? new Date(liveData.supervisorLocationUpdatedAt.toDate?.() || liveData.supervisorLocationUpdatedAt).toLocaleTimeString()
+    ? new Date(liveData.supervisorLocationUpdatedAt).toLocaleTimeString()
     : null;
 
   return (
@@ -274,19 +274,36 @@ export default function AdminDashboard() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      if (!user) navigate("/login");
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session?.user) navigate("/login");
       else setAuthReady(true);
     });
-    return () => unsub();
+    return () => sub.subscription.unsubscribe();
   }, [navigate]);
 
   useEffect(() => {
     if (!authReady) return;
-    const u1 = onSnapshot(collection(db,"bookings"), snap => setAllBookings(snap.docs.map(d=>({id:d.id,...d.data()}))));
-    const u2 = onSnapshot(collection(db,"users"),    snap => setAllUsers(snap.docs.map(d=>({id:d.id,...d.data()}))));
-    const u3 = onSnapshot(collection(db,"labours"),  snap => setAllLabours(snap.docs.map(d=>({id:d.id,...d.data()}))));
-    return () => { u1(); u2(); u3(); };
+
+    const fetchBookings = async () => {
+      const { data } = await supabase.from("bookings").select("*");
+      setAllBookings((data || []).map(toCamel));
+    };
+    const fetchUsers = async () => {
+      const { data } = await supabase.from("profiles").select("*");
+      setAllUsers((data || []).map(toCamel));
+    };
+    const fetchLabours = async () => {
+      const { data } = await supabase.from("labours").select("*");
+      setAllLabours((data || []).map(toCamel));
+    };
+
+    fetchBookings(); fetchUsers(); fetchLabours();
+
+    const c1 = supabase.channel("admin-bookings").on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, fetchBookings).subscribe();
+    const c2 = supabase.channel("admin-profiles").on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, fetchUsers).subscribe();
+    const c3 = supabase.channel("admin-labours").on("postgres_changes", { event: "*", schema: "public", table: "labours" }, fetchLabours).subscribe();
+
+    return () => { supabase.removeChannel(c1); supabase.removeChannel(c2); supabase.removeChannel(c3); };
   }, [authReady]);
 
   // Lock body scroll when mobile sidebar is open
@@ -330,11 +347,17 @@ export default function AdminDashboard() {
     if (!supName||!supPhone||!supEmail||!supPass){toast.error("All fields are required."); return;}
     setLoading(true);
     try {
-      const cred = await createUserWithEmailAndPassword(auth, supEmail, supPass);
-      await setDoc(doc(db,"users",cred.user.uid),{ name:supName,phone:supPhone,email:supEmail,role:"supervisor",labourCount:0,createdAt:new Date() });
+      const temp = createIsolatedAuthClient();
+      const { data, error } = await temp.auth.signUp({ email: supEmail, password: supPass });
+      if (error) throw error;
+      await temp.auth.signOut();
+      const { error: profileError } = await supabase.from("profiles").insert(toSnake({
+        id: data.user.id, name: supName, phone: supPhone, email: supEmail, role: "supervisor", labourCount: 0,
+      }));
+      if (profileError) throw profileError;
       toast.success(`Supervisor ${supName} created successfully.`);
       setAddSupModal(false); setSupName(""); setSupPhone(""); setSupEmail(""); setSupPass("");
-    } catch(err){ toast.error(err.code==="auth/email-already-in-use"?"Email already in use.":"Failed to create supervisor."); }
+    } catch(err){ toast.error(err.message?.includes("already registered")?"Email already in use.":"Failed to create supervisor."); }
     setLoading(false);
   };
 
@@ -344,7 +367,8 @@ export default function AdminDashboard() {
     setLoading(true);
     try {
       const sup = supervisors.find(s=>s.id===labSupId);
-      await addDoc(collection(db,"labours"),{ name:labName,phone:labPhone,supervisorId:labSupId,supervisorName:sup?.name,available:true,unavailability:{},createdAt:new Date() });
+      const { error } = await supabase.from("labours").insert(toSnake({ name:labName,phone:labPhone,supervisorId:labSupId,supervisorName:sup?.name,available:true,unavailability:{} }));
+      if (error) throw error;
       toast.success(`${labName} added to team.`);
       setAddLabourModal(false); setLabName(""); setLabPhone(""); setLabSupId("");
     } catch{ toast.error("Failed to add labour."); }
@@ -353,17 +377,17 @@ export default function AdminDashboard() {
 
   const delSupervisor = async (id, name) => {
     if (!window.confirm(`Remove supervisor ${name}? This cannot be undone.`)) return;
-    await deleteDoc(doc(db,"users",id));
+    await supabase.from("profiles").delete().eq("id", id);
     toast.success(`${name} removed.`);
   };
   const delLabour = async (id, name) => {
     if (!window.confirm(`Remove ${name}? This cannot be undone.`)) return;
-    await deleteDoc(doc(db,"labours",id));
+    await supabase.from("labours").delete().eq("id", id);
     toast.success(`${name} removed.`);
   };
   const delFarmer = async (id, name) => {
     if (!window.confirm(`Remove farmer ${name}? This cannot be undone.`)) return;
-    await deleteDoc(doc(db,"users",id));
+    await supabase.from("profiles").delete().eq("id", id);
     toast.success(`${name} removed.`);
   };
 
@@ -376,7 +400,7 @@ export default function AdminDashboard() {
     const rate    = SLOT_CFG[bSlot]?.rate||300;
     setLoading(true);
     try {
-      await addDoc(collection(db,"bookings"),{
+      const { error } = await supabase.from("bookings").insert(toSnake({
         farmerId:bFarmerId, farmerName:farmer?.name, farmerPhone:farmer?.phone, village:farmer?.village,
         farmAddress:bAddress, landmark:bLandmark,
         supervisorId:bSupervisorId, supervisorName:sup?.name, supervisorPhone:sup?.phone,
@@ -385,15 +409,16 @@ export default function AdminDashboard() {
         timeSlot:bSlot, workType:bWorkType, date:bDate,
         totalCost:bSelectedLabours.length*rate, ratePerLabour:rate,
         status:"assigned", farmerConfirmed:false, supervisorConfirmed:false,
-        labourAttendance:{}, bookedByAdmin:true, createdAt:new Date(),
-      });
+        labourAttendance:{}, bookedByAdmin:true,
+      }));
+      if (error) throw error;
       toast.success("Booking created and assigned.");
       setBFarmerId(""); setBSupervisorId(""); setBDate(""); setBAddress(""); setBLandmark(""); setBSelectedLabours([]);
     } catch{ toast.error("Failed to create booking."); }
     setLoading(false);
   };
 
-  const handleLogout = async () => { await signOut(auth); navigate("/login"); };
+  const handleLogout = async () => { await supabase.auth.signOut(); navigate("/login"); };
 
   const statusStyle = (s) => {
     if (s==="pending")   return {bg:"#fefce8", color:"#854d0e", border:"#fde047"};

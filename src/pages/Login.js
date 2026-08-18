@@ -1,7 +1,5 @@
 import React, { useState } from "react";
-import { auth, db } from "../firebase";
-import { signInWithEmailAndPassword } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { supabase } from "../supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import toast, { Toaster } from "react-hot-toast";
@@ -54,12 +52,13 @@ function Login() {
     setLoading(true);
 
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
-      const userDoc = await getDoc(doc(db, "users", user.uid));
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      if (authError) throw authError;
+      const user = authData.user;
+      const { data: userData, error: profileError } = await supabase
+        .from("profiles").select("*").eq("id", user.id).single();
 
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
+      if (userData) {
         if (userData.role !== role) {
           toast.error(`You are not registered as a ${role}!`);
           setLoading(false);
@@ -72,10 +71,10 @@ function Login() {
           else if (role === "admin") navigate("/admin/dashboard");
         }, 800);
       } else {
-        toast.error("User not found! Please register.");
+        toast.error(profileError?.message || "User not found! Please register.");
       }
     } catch (err) {
-      toast.error("Invalid email or password!");
+      toast.error(err.message || "Invalid email or password!");
     }
     setLoading(false);
   };
