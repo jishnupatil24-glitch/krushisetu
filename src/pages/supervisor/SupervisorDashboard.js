@@ -135,15 +135,16 @@ export default function SupervisorDashboard() {
   // ── Assignment sub-tab buckets ──
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
+  const isDone = b => b.status === "completed" || (b.farmerConfirmed && b.supervisorConfirmed);
   const upcomingAssignments = myAllAssignments.filter(b => {
     const d = new Date(b.date); d.setHours(0, 0, 0, 0);
-    return d > today && b.status === "assigned";
+    return d > today && b.status === "assigned" && !isDone(b);
   });
   const liveAssignments = myAllAssignments.filter(b => {
     const d = new Date(b.date); d.setHours(0, 0, 0, 0);
-    return d <= today && b.status === "assigned";
+    return d <= today && b.status === "assigned" && !isDone(b);
   });
-  const completedAssignments = myAllAssignments.filter(b => b.status === "completed");
+  const completedAssignments = myAllAssignments.filter(isDone);
 
   // Most-recent date first
   const sortDesc = arr => [...arr].sort((a, b) => new Date(b.date) - new Date(a.date));

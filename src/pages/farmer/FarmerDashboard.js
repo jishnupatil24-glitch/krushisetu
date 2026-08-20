@@ -371,7 +371,12 @@ export default function FarmerDashboard() {
 
   const handleConfirmBooking = async (bookingId) => {
     try {
-      const { error } = await supabase.from("bookings").update(toSnake({ farmerConfirmed: true })).eq("id", bookingId);
+      const booking = bookings.find(b => b.id === bookingId);
+      const goCompleted = booking?.supervisorConfirmed === true;
+      const { error } = await supabase.from("bookings").update(toSnake({
+        farmerConfirmed: true,
+        ...(goCompleted ? { status: "completed" } : {}),
+      })).eq("id", bookingId);
       if (error) throw error;
       toast.success("Work confirmed!");
     } catch (err) { toast.error(`Failed to confirm: ${err?.message || err}`); }

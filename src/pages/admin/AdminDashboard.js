@@ -336,9 +336,10 @@ export default function AdminDashboard() {
   const revenue    = allBookings.filter(b=>b.status!=="pending").reduce((s,b)=>s+(b.totalCost||0),0);
   const labSalary  = allLabours.length  * LABOUR_MONTHLY;
   const supSalary  = supervisors.length * SUP_MONTHLY;
-  const liveB      = allBookings.filter(b=>b.status==="assigned");
+  const isDone     = b=>b.status==="completed"||(b.farmerConfirmed&&b.supervisorConfirmed);
+  const liveB      = allBookings.filter(b=>b.status==="assigned"&&!isDone(b));
   const pendingB   = allBookings.filter(b=>b.status==="pending");
-  const completedB = allBookings.filter(b=>b.status==="completed");
+  const completedB = allBookings.filter(isDone);
   const mismatches = allBookings.filter(b=>b.status==="assigned"&&(b.farmerConfirmed||b.supervisorConfirmed)&&b.farmerConfirmed!==b.supervisorConfirmed);
   const holidaysToday = allLabours.filter(l=>Object.keys(l.unavailability||{}).some(k=>k.startsWith(today)));
 
