@@ -49,6 +49,9 @@ create table public.bookings (
   supervisor_confirmed boolean default false,
   farmer_attendance jsonb default '{}',
   labour_attendance jsonb default '{}',
+  supervisor_visited_farm boolean,
+  supervisor_visited_at timestamptz,
+  supervisor_visit_distance int,
   payment_method text,                          -- "online" | "cash"
   payment_status text,                          -- "paid" | "cash_on_delivery"
   payment_id text,
@@ -90,7 +93,7 @@ create policy "profiles_delete_admin" on public.profiles for delete to authentic
 -- bookings
 create policy "bookings_select_all"    on public.bookings for select to authenticated using (true);
 create policy "bookings_insert_farmer" on public.bookings for insert to authenticated with check (auth.uid() = farmer_id);
-create policy "bookings_update_party"  on public.bookings for update to authenticated using (auth.uid() = farmer_id or auth.uid() = supervisor_id or public.is_admin());
+create policy "bookings_update_party"  on public.bookings for update to authenticated using (auth.uid() = farmer_id or auth.uid() = supervisor_id or supervisor_id is null or public.is_admin());
 create policy "bookings_delete_admin"  on public.bookings for delete to authenticated using (public.is_admin());
 
 -- labours

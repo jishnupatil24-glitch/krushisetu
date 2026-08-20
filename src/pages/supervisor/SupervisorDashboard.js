@@ -201,7 +201,7 @@ export default function SupervisorDashboard() {
     setLoading(true);
     try {
       const selected = myLabours.filter(l => selectedLabourIds.includes(l.id));
-      await supabase.from("bookings").update(toSnake({
+      const { error } = await supabase.from("bookings").update(toSnake({
         status:              "assigned",
         supervisorId:        supData.id,
         supervisorName:      supData.name,
@@ -210,6 +210,7 @@ export default function SupervisorDashboard() {
         assignedLabourIds:   selectedLabourIds,
         assignedLabourNames: selected.map(l => l.name),
       })).eq("id", assignModal.id);
+      if (error) throw error;
       toast.success(`Assigned to ${assignModal.farmerName}`);
       setAssignModal(null); setSelectedLabourIds([]);
     } catch { toast.error("Failed to assign."); }
@@ -222,9 +223,10 @@ export default function SupervisorDashboard() {
     try {
       const booking = allBookings.find(b => b.id === bookingId);
       const updated = { ...(booking.labourAttendance || {}), [labourId]: !currentStatus };
-      await supabase.from("bookings").update({ labour_attendance: updated }).eq("id", bookingId);
+      const { error } = await supabase.from("bookings").update({ labour_attendance: updated }).eq("id", bookingId);
+      if (error) throw error;
       toast.success(!currentStatus ? "Marked as present" : "Marked as absent");
-    } catch { toast.error("Failed to update attendance."); }
+    } catch (err) { toast.error(`Failed to update attendance: ${err?.message || err}`); }
   };
 
   // When supervisor confirms — also sets status:"completed" if farmer already confirmed,
@@ -246,26 +248,29 @@ export default function SupervisorDashboard() {
             async pos => {
               const distance = getDistanceMetres(pos.coords.latitude, pos.coords.longitude, booking.farmLat, booking.farmLng);
               const visited  = distance <= 500;
-              await supabase.from("bookings").update(toSnake(buildPayload({
+              const { error } = await supabase.from("bookings").update(toSnake(buildPayload({
                 supervisorVisitedFarm: visited, supervisorVisitedAt: new Date(), supervisorVisitDistance: Math.round(distance),
               }))).eq("id", bookingId);
+              if (error) { toast.error(`Failed to confirm: ${error.message}`); resolve(); return; }
               toast.success(visited ? "Work confirmed — farm visit verified" : "Work confirmed");
               resolve();
             },
             async () => {
-              await supabase.from("bookings").update(toSnake(buildPayload({ supervisorVisitedFarm: false, supervisorVisitedAt: new Date() }))).eq("id", bookingId);
+              const { error } = await supabase.from("bookings").update(toSnake(buildPayload({ supervisorVisitedFarm: false, supervisorVisitedAt: new Date() }))).eq("id", bookingId);
+              if (error) { toast.error(`Failed to confirm: ${error.message}`); resolve(); return; }
               toast.success("Work confirmed");
               resolve();
             },
             { enableHighAccuracy: true, timeout: 8000 }
           );
         });
-      } catch { toast.error("Failed to confirm."); }
+      } catch (err) { toast.error(`Failed to confirm: ${err?.message || err}`); }
     } else {
       try {
-        await supabase.from("bookings").update(toSnake(buildPayload({}))).eq("id", bookingId);
+        const { error } = await supabase.from("bookings").update(toSnake(buildPayload({}))).eq("id", bookingId);
+        if (error) throw error;
         toast.success("Work confirmed");
-      } catch { toast.error("Failed to confirm."); }
+      } catch (err) { toast.error(`Failed to confirm: ${err?.message || err}`); }
     }
   };
 

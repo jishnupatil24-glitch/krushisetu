@@ -366,7 +366,7 @@ export default function FarmerDashboard() {
       const { error } = await supabase.from("bookings").update(toSnake({ farmerAttendance: updated })).eq("id", bookingId);
       if (error) throw error;
       toast.success(!currentStatus ? "Marked present ✅" : "Marked absent");
-    } catch { toast.error("Failed to update."); }
+    } catch (err) { toast.error(`Failed to update: ${err?.message || err}`); }
   };
 
   const handleConfirmBooking = async (bookingId) => {
@@ -374,7 +374,7 @@ export default function FarmerDashboard() {
       const { error } = await supabase.from("bookings").update(toSnake({ farmerConfirmed: true })).eq("id", bookingId);
       if (error) throw error;
       toast.success("Work confirmed!");
-    } catch { toast.error("Failed to confirm."); }
+    } catch (err) { toast.error(`Failed to confirm: ${err?.message || err}`); }
   };
 
   const handleLogout = async () => { await supabase.auth.signOut(); navigate("/login"); };
